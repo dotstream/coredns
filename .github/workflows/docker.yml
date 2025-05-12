@@ -32,4 +32,4 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_PASSWORD }}
       - name: Publish Docker Images
-        run: make VERSION=${RELEASE:1} DOCKER=coredns -f Makefile.docker docker-push
+        run: make VERSION=${RELEASE:1} DOCKER=${{ vars.REGISTRY_SERVER }}/coredns -f Makefile.docker docker-push
