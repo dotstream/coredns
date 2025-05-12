@@ -5,7 +5,7 @@ on:
   push:
     branches:
       - 'stream-gateway/*'
-
+      
 jobs:
   release:
     name: Release
@@ -21,7 +21,7 @@ jobs:
         run: |
           set -x -e
           VERSION=$(make -f Makefile.release version)
-          COMMIT=$(git rev-parse --quiet --verify ${{ github.event.inputs.commit }})
+          COMMIT=$(git -P log -1 --name-only | head -1 | awk '{print $2}')
           if [[ "$(git tag -l v${VERSION})" == "v${VERSION}" ]]; then
             echo "v${VERSION} already released"
             exit 1
