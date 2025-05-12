@@ -2,10 +2,9 @@ name: Release
 
 on:
   workflow_dispatch:
-    inputs:
-      commit:
-        description: "Commit (e.g., 52f0348)"
-        default: "master"
+  push:
+    branches:
+      - 'stream-gateway/*'
 
 jobs:
   release:
