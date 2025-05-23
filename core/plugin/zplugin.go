@@ -10,6 +10,7 @@ import (
 	_ "github.com/coredns/coredns/plugin/auto"
 	_ "github.com/coredns/coredns/plugin/autopath"
 	_ "github.com/coredns/coredns/plugin/azure"
+	_ "github.com/coredns/coredns/plugin/azure_identity"
 	_ "github.com/coredns/coredns/plugin/bind"
 	_ "github.com/coredns/coredns/plugin/bufsize"
 	_ "github.com/coredns/coredns/plugin/cache"

@@ -64,4 +64,5 @@ var Directives = []string{
 	"sign",
 	"view",
 	"records",
+	"azure_identity",
 }
