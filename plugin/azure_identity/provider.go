@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -75,16 +76,61 @@ type AzureProvider struct {
 	zonesCache       *zonesCache[myZone]
 }
 
-func NewAzureProvider(subscriptionID string, resourceGroup string, tenantID string) (*AzureProvider, error) {
+func getAuthorization(clientOpt policy.ClientOptions, clientId, clientSecret, tenantId string) (azcore.TokenCredential, error) {
+
+	if clientId != "" && clientSecret != "" {
+		log.Infof("Using authenticating with clientID and secret key")
+		cred, err := azidentity.NewClientSecretCredential(tenantId, clientId, clientSecret, &azidentity.ClientSecretCredentialOptions{ClientOptions: clientOpt})
+		if err != nil {
+			return nil, err
+		}
+		return cred, nil
+	}
+
+	// Use Workload Identity if present
+	if os.Getenv("AZURE_FEDERATED_TOKEN_FILE") != "" {
+		wcOpt := &azidentity.WorkloadIdentityCredentialOptions{
+			ClientOptions: clientOpt,
+		}
+
+		if clientId != "" {
+			wcOpt.ClientID = clientId
+		}
+
+		if tenantId != "" {
+			wcOpt.TenantID = tenantId
+		}
+
+		return azidentity.NewWorkloadIdentityCredential(wcOpt)
+	}
+
+	log.Info("No Azure Workload Identity found: attempting to authenticate with an Azure Managed Service Identity (MSI)")
+
+	msiOpt := &azidentity.ManagedIdentityCredentialOptions{ClientOptions: clientOpt}
+	if clientId != "" {
+		msiOpt.ID = azidentity.ClientID(clientId)
+	}
+
+	cred, err := azidentity.NewManagedIdentityCredential(msiOpt)
+	if err != nil {
+		return nil, err
+	}
+
+	return cred, nil
+}
+
+func NewAzureProvider(subscriptionID string, resourceGroup string, tenantID string, clientId string, clientSecret string) (*AzureProvider, error) {
 
 	cloudCfg := cloud.AzurePublic
-	clientOpts := azcore.ClientOptions{
+
+	clientOpts := policy.ClientOptions{
 		Cloud: cloudCfg,
 		Retry: policy.RetryOptions{
 			MaxRetries: 0,
 			TryTimeout: 5000,
 		},
 		Logging: policy.LogOptions{
+			IncludeBody: true,
 			AllowedHeaders: []string{
 				msRequestIDHeader,
 				msCorrelationRequestHeader,
@@ -100,15 +146,8 @@ func NewAzureProvider(subscriptionID string, resourceGroup string, tenantID stri
 	armClientOpts := &arm.ClientOptions{
 		ClientOptions: clientOpts,
 	}
-	log.Info("Using managed identity extension to retrieve access token for Azure API.")
-	msiOpt := azidentity.ManagedIdentityCredentialOptions{
-		ClientOptions: clientOpts,
-	}
 
-	cred, err := azidentity.NewManagedIdentityCredential(&msiOpt)
-	if err != nil {
-		return nil, err
-	}
+	cred, err := getAuthorization(clientOpts, clientId, clientSecret, tenantID)
 
 	zonesClient, err := azuredns.NewZonesClient(subscriptionID, cred, armClientOpts)
 

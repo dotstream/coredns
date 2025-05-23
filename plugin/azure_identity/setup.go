@@ -19,7 +19,7 @@ func setup(c *caddy.Controller) error {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 
-	provider, err := NewAzureProvider(azi.subscriptionId, azi.resourceGroupName, azi.tenantId)
+	provider, err := NewAzureProvider(azi.subscriptionId, azi.resourceGroupName, azi.tenantId, azi.clientId, azi.clientSecret)
 	if err != nil {
 		cancel()
 		return plugin.Error("azure_identity", err)
@@ -59,11 +59,16 @@ func parse(c *caddy.Controller) (AzureIdentity, error) {
 					return azureIdentity, c.ArgErr()
 				}
 				azureIdentity.tenantId = c.Val()
-			case "zone":
+			case "clientId":
 				if !c.NextArg() {
 					return azureIdentity, c.ArgErr()
 				}
-				azureIdentity.dnsZone = c.Val()
+				azureIdentity.clientId = c.Val()
+			case "clientSecret":
+				if !c.NextArg() {
+					return azureIdentity, c.ArgErr()
+				}
+				azureIdentity.clientSecret = c.Val()
 			case "resource_group":
 				if !c.NextArg() {
 					return azureIdentity, c.ArgErr()

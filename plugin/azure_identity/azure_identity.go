@@ -14,9 +14,10 @@ var log = clog.NewWithPlugin("azure_identity")
 
 type AzureIdentity struct {
 	resourceGroupName string
-	dnsZone           string
 	tenantId          string
 	subscriptionId    string
+	clientId          string
+	clientSecret      string
 	provider          *AzureProvider
 	Next              plugin.Handler
 }
