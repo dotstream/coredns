@@ -2,53 +2,17 @@ package azure_identity
 
 import (
 	"context"
-	"fmt"
 	"net"
-	"net/http"
 	"os"
 	"strings"
 	"time"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
-	"github.com/Azure/azure-sdk-for-go/sdk/azcore/arm"
-	"github.com/Azure/azure-sdk-for-go/sdk/azcore/cloud"
-	azlog "github.com/Azure/azure-sdk-for-go/sdk/azcore/log"
-	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
 	azcoreruntime "github.com/Azure/azure-sdk-for-go/sdk/azcore/runtime"
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	azuredns "github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/dns/armdns"
 	"github.com/coredns/coredns/plugin/file"
-	"github.com/google/uuid"
 	"github.com/miekg/dns"
-)
-
-type ctxKey string
-
-const (
-	// Context key for request ID
-	clientRequestIDKey ctxKey = "client-request-id"
-	// Azure API Headers
-	msRequestIDHeader          = "x-ms-request-id"
-	msCorrelationRequestHeader = "x-ms-correlation-request-id"
-	msClientRequestIDHeader    = "x-ms-client-request-id"
-)
-
-type customHeaderPolicy struct{}
-
-func (p *customHeaderPolicy) Do(req *policy.Request) (*http.Response, error) {
-	id := req.Raw().Header.Get(msClientRequestIDHeader)
-	if id == "" {
-		id = uuid.New().String()
-		req.Raw().Header.Set(msClientRequestIDHeader, id)
-		newCtx := context.WithValue(req.Raw().Context(), clientRequestIDKey, id)
-		*req.Raw() = *req.Raw().WithContext(newCtx)
-	}
-	return req.Next()
-}
-func CustomHeaderPolicynew() policy.Policy { return &customHeaderPolicy{} }
-
-const (
-	defaultTTL = 300
 )
 
 // ZonesClient is an interface of dns.ZoneClient that can be stubbed for testing.
@@ -78,11 +42,11 @@ type AzureProvider struct {
 	zonesCache       *zonesCache[myZone]
 }
 
-func getAuthorization(clientOpt policy.ClientOptions, clientId, clientSecret, tenantId string) (azcore.TokenCredential, error) {
+func getAuthorization(clientId, clientSecret, tenantId string) (azcore.TokenCredential, error) {
 
 	if clientId != "" && clientSecret != "" {
 		log.Infof("Using authenticating with clientID and secret key")
-		cred, err := azidentity.NewClientSecretCredential(tenantId, clientId, clientSecret, &azidentity.ClientSecretCredentialOptions{ClientOptions: clientOpt})
+		cred, err := azidentity.NewClientSecretCredential(tenantId, clientId, clientSecret, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -92,9 +56,7 @@ func getAuthorization(clientOpt policy.ClientOptions, clientId, clientSecret, te
 	// Use Workload Identity if present
 	if os.Getenv("AZURE_FEDERATED_TOKEN_FILE") != "" {
 
-		wcOpt := &azidentity.WorkloadIdentityCredentialOptions{
-			ClientOptions: clientOpt,
-		}
+		wcOpt := azidentity.WorkloadIdentityCredentialOptions{}
 
 		if clientId != "" {
 			wcOpt.ClientID = clientId
@@ -104,12 +66,12 @@ func getAuthorization(clientOpt policy.ClientOptions, clientId, clientSecret, te
 			wcOpt.TenantID = tenantId
 		}
 
-		return azidentity.NewWorkloadIdentityCredential(wcOpt)
+		return azidentity.NewWorkloadIdentityCredential(&wcOpt)
 	}
 
 	log.Info("No Azure Workload Identity found: attempting to authenticate with an Azure Managed Service Identity (MSI)")
 
-	msiOpt := &azidentity.ManagedIdentityCredentialOptions{ClientOptions: clientOpt}
+	msiOpt := &azidentity.ManagedIdentityCredentialOptions{}
 	if clientId != "" {
 		msiOpt.ID = azidentity.ClientID(clientId)
 	}
@@ -124,56 +86,22 @@ func getAuthorization(clientOpt policy.ClientOptions, clientId, clientSecret, te
 
 func NewAzureProvider(subscriptionID string, resourceGroup string, tenantID string, clientId string, clientSecret string) (*AzureProvider, error) {
 
-	cloudCfg := cloud.AzurePublic
+	log.Info("Configured Azure client")
 
-	clientOpts := policy.ClientOptions{
-		Cloud: cloudCfg,
-		Retry: policy.RetryOptions{
-			MaxRetries: 0,
-			TryTimeout: 5000,
-		},
-		Logging: policy.LogOptions{
-			IncludeBody: true,
-			AllowedHeaders: []string{
-				msRequestIDHeader,
-				msCorrelationRequestHeader,
-				msClientRequestIDHeader,
-			},
-		},
-		PerCallPolicies: []policy.Policy{
-			CustomHeaderPolicynew(),
-		},
-	}
-
-	log.Infof("Configured Azure client with maxRetries: %d", clientOpts.Retry.MaxRetries)
-	armClientOpts := &arm.ClientOptions{
-		ClientOptions: clientOpts,
-	}
-
-	// cred, err := getAuthorization(clientOpts, clientId, clientSecret, tenantID)
-
-	azlog.SetListener(func(event azlog.Event, s string) {
-		fmt.Println(s)
-	})
-
-	azlog.SetEvents(azidentity.EventAuthentication)
-	cred, err := azidentity.NewDefaultAzureCredential(nil)
+	cred, err := getAuthorization(clientId, clientSecret, tenantID)
 
 	if err != nil {
 		return nil, err
 	}
 
-	zonesClient, err := azuredns.NewZonesClient(subscriptionID, cred, armClientOpts)
+	factory, err := azuredns.NewClientFactory(subscriptionID, cred, nil)
 
 	if err != nil {
 		return nil, err
 	}
 
-	recordSetsClient, err := azuredns.NewRecordSetsClient(subscriptionID, cred, armClientOpts)
-
-	if err != nil {
-		return nil, err
-	}
+	zonesClient := factory.NewZonesClient()
+	recordSetsClient := factory.NewRecordSetsClient()
 
 	return &AzureProvider{
 		resourceGroup:    resourceGroup,
@@ -185,6 +113,7 @@ func NewAzureProvider(subscriptionID string, resourceGroup string, tenantID stri
 }
 
 func (p *AzureProvider) Run(ctx context.Context) error {
+
 	if err := p.updateZones(ctx); err != nil {
 		return err
 	}

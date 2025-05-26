@@ -13,6 +13,7 @@ func init() {
 }
 
 func setup(c *caddy.Controller) error {
+
 	azi, err := parse(c)
 	if err != nil {
 		return plugin.Error("azure_identity", err)

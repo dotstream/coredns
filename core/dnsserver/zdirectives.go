@@ -11,6 +11,8 @@ package dnsserver
 // care what plugin above them are doing.
 var Directives = []string{
 	"root",
+	"azure_identity",
+	"records_2",
 	"metadata",
 	"geoip",
 	"cancel",
@@ -64,6 +66,4 @@ var Directives = []string{
 	"sign",
 	"view",
 	"records",
-	"azure_identity",
-	"records_2",
 }
