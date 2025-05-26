@@ -2,6 +2,7 @@ package azure_identity
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"net/http"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/arm"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/cloud"
+	azlog "github.com/Azure/azure-sdk-for-go/sdk/azcore/log"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
 	azcoreruntime "github.com/Azure/azure-sdk-for-go/sdk/azcore/runtime"
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
@@ -89,6 +91,7 @@ func getAuthorization(clientOpt policy.ClientOptions, clientId, clientSecret, te
 
 	// Use Workload Identity if present
 	if os.Getenv("AZURE_FEDERATED_TOKEN_FILE") != "" {
+
 		wcOpt := &azidentity.WorkloadIdentityCredentialOptions{
 			ClientOptions: clientOpt,
 		}
@@ -147,7 +150,18 @@ func NewAzureProvider(subscriptionID string, resourceGroup string, tenantID stri
 		ClientOptions: clientOpts,
 	}
 
-	cred, err := getAuthorization(clientOpts, clientId, clientSecret, tenantID)
+	// cred, err := getAuthorization(clientOpts, clientId, clientSecret, tenantID)
+
+	azlog.SetListener(func(event azlog.Event, s string) {
+		fmt.Println(s)
+	})
+
+	azlog.SetEvents(azidentity.EventAuthentication)
+	cred, err := azidentity.NewDefaultAzureCredential(nil)
+
+	if err != nil {
+		return nil, err
+	}
 
 	zonesClient, err := azuredns.NewZonesClient(subscriptionID, cred, armClientOpts)
 
