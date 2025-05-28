@@ -5,6 +5,7 @@ import (
 	"net"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
@@ -12,6 +13,7 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	azuredns "github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/dns/armdns"
 	"github.com/coredns/coredns/plugin/file"
+	"github.com/coredns/coredns/plugin/pkg/upstream"
 	"github.com/miekg/dns"
 )
 
@@ -39,56 +41,66 @@ type AzureProvider struct {
 	zonesClient      ZonesClient
 	recordSetsClient RecordSetsClient
 	maxRetriesCount  int
-	zonesCache       *zonesCache[myZone]
+	zonesCache       *zonesCache[*myZone]
+	upstream         *upstream.Upstream
+	zMu              sync.RWMutex
 }
 
-func getAuthorization(clientId, clientSecret, tenantId string) (azcore.TokenCredential, error) {
+func getAuthorization(clientId, clientSecret, tenantId string, local bool) (azcore.TokenCredential, error) {
 
-	if clientId != "" && clientSecret != "" {
-		log.Infof("Using authenticating with clientID and secret key")
-		cred, err := azidentity.NewClientSecretCredential(tenantId, clientId, clientSecret, nil)
+	if local {
+		cred, _ := azidentity.NewDefaultAzureCredential(nil)
+		if cred != nil {
+			return cred, nil
+		}
+		return cred, nil
+	} else {
+		if clientId != "" && clientSecret != "" {
+			log.Infof("Using authenticating with clientID and secret key")
+			cred, err := azidentity.NewClientSecretCredential(tenantId, clientId, clientSecret, nil)
+			if err != nil {
+				return nil, err
+			}
+			return cred, nil
+		}
+
+		// Use Workload Identity if present
+		if os.Getenv("AZURE_FEDERATED_TOKEN_FILE") != "" {
+
+			wcOpt := azidentity.WorkloadIdentityCredentialOptions{}
+
+			if clientId != "" {
+				wcOpt.ClientID = clientId
+			}
+
+			if tenantId != "" {
+				wcOpt.TenantID = tenantId
+			}
+
+			return azidentity.NewWorkloadIdentityCredential(&wcOpt)
+		}
+
+		log.Info("No Azure Workload Identity found: attempting to authenticate with an Azure Managed Service Identity (MSI)")
+
+		msiOpt := &azidentity.ManagedIdentityCredentialOptions{}
+		if clientId != "" {
+			msiOpt.ID = azidentity.ClientID(clientId)
+		}
+
+		cred, err := azidentity.NewManagedIdentityCredential(msiOpt)
 		if err != nil {
 			return nil, err
 		}
+
 		return cred, nil
 	}
-
-	// Use Workload Identity if present
-	if os.Getenv("AZURE_FEDERATED_TOKEN_FILE") != "" {
-
-		wcOpt := azidentity.WorkloadIdentityCredentialOptions{}
-
-		if clientId != "" {
-			wcOpt.ClientID = clientId
-		}
-
-		if tenantId != "" {
-			wcOpt.TenantID = tenantId
-		}
-
-		return azidentity.NewWorkloadIdentityCredential(&wcOpt)
-	}
-
-	log.Info("No Azure Workload Identity found: attempting to authenticate with an Azure Managed Service Identity (MSI)")
-
-	msiOpt := &azidentity.ManagedIdentityCredentialOptions{}
-	if clientId != "" {
-		msiOpt.ID = azidentity.ClientID(clientId)
-	}
-
-	cred, err := azidentity.NewManagedIdentityCredential(msiOpt)
-	if err != nil {
-		return nil, err
-	}
-
-	return cred, nil
 }
 
-func NewAzureProvider(subscriptionID string, resourceGroup string, tenantID string, clientId string, clientSecret string) (*AzureProvider, error) {
+func NewAzureProvider(subscriptionID string, resourceGroup string, tenantID string, clientId string, clientSecret string, local bool) (*AzureProvider, error) {
 
 	log.Info("Configured Azure client")
 
-	cred, err := getAuthorization(clientId, clientSecret, tenantID)
+	cred, err := getAuthorization(clientId, clientSecret, tenantID, local)
 
 	if err != nil {
 		return nil, err
@@ -103,22 +115,31 @@ func NewAzureProvider(subscriptionID string, resourceGroup string, tenantID stri
 	zonesClient := factory.NewZonesClient()
 	recordSetsClient := factory.NewRecordSetsClient()
 
-	return &AzureProvider{
+	provider := AzureProvider{
 		resourceGroup:    resourceGroup,
 		zonesClient:      zonesClient,
-		zonesCache:       &zonesCache[myZone]{duration: time.Duration(time.Duration.Minutes(5))}, // 5 minutes zone cache
+		zonesCache:       &zonesCache[*myZone]{},
 		recordSetsClient: recordSetsClient,
 		maxRetriesCount:  10,
-	}, nil
+		upstream:         upstream.New(),
+	}
+	provider.zonesCache.duration = time.Duration(5 * float64(time.Minute))
+
+	return &provider, nil
 }
 
-func (p *AzureProvider) Run(ctx context.Context) error {
+func (p *AzureProvider) Run(delay int64, ctx context.Context) error {
 
 	if err := p.updateZones(ctx); err != nil {
 		return err
 	}
+
+	if err := p.updateRecords(ctx); err != nil {
+		return err
+	}
+
 	go func() {
-		delay := 1 * time.Minute
+		delay := time.Duration(delay) * time.Second
 		timer := time.NewTimer(delay)
 		defer timer.Stop()
 		for {
@@ -141,7 +162,7 @@ func (az *AzureProvider) findZone(zoneName string) *myZone {
 
 	for _, zone := range az.zonesCache.Get() {
 		if zone.name == zoneName {
-			return &zone
+			return zone
 		}
 	}
 
@@ -153,7 +174,7 @@ func (az *AzureProvider) updateZones(ctx context.Context) error {
 	log.Infof("Retrieving Azure DNS zones for resource group: %s.", az.resourceGroup)
 
 	pager := az.zonesClient.NewListByResourceGroupPager(az.resourceGroup, &azuredns.ZonesClientListByResourceGroupOptions{Top: nil})
-	var zones []myZone
+	var zones []*myZone
 	var zonesName []string
 
 	for pager.More() {
@@ -165,15 +186,18 @@ func (az *AzureProvider) updateZones(ctx context.Context) error {
 		for _, zone := range nextResult.Value {
 			if zone.Name != nil {
 				log.Infof("Zone name %s.", *zone.Name)
-				zones = append(zones, myZone{dnsZone: *zone, name: *zone.Name, z: nil})
-				zonesName = append(zonesName, *zone.Name)
+				zoneName := *zone.Name + "."
+				zones = append(zones, &myZone{dnsZone: *zone, name: zoneName, z: nil})
+				zonesName = append(zonesName, zoneName)
 			}
 		}
 	}
 
 	log.Infof("Found %d Azure DNS zone(s). Updating zones cache", len(zones))
+	az.zMu.Lock()
 	az.zonesCache.Reset(zones)
 	az.zoneNames = zonesName
+	az.zMu.Unlock()
 
 	return nil
 }
@@ -200,7 +224,10 @@ func (az *AzureProvider) updateRecords(ctx context.Context) error {
 			return err
 		}
 
+		newZ.Upstream = az.upstream
+		az.zMu.Lock()
 		zone.z = newZ
+		az.zMu.Unlock()
 
 		log.Infof("Found %d Azure DNS records (zone: %s)", newZ.Tree.Count, zone.name)
 	}

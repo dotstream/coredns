@@ -2,6 +2,7 @@ package azure_identity
 
 import (
 	"context"
+	"strconv"
 
 	"github.com/coredns/caddy"
 	"github.com/coredns/coredns/core/dnsserver"
@@ -20,14 +21,14 @@ func setup(c *caddy.Controller) error {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 
-	provider, err := NewAzureProvider(azi.subscriptionId, azi.resourceGroupName, azi.tenantId, azi.clientId, azi.clientSecret)
+	provider, err := NewAzureProvider(azi.subscriptionId, azi.resourceGroupName, azi.tenantId, azi.clientId, azi.clientSecret, azi.local)
 	if err != nil {
 		cancel()
 		return plugin.Error("azure_identity", err)
 	}
 	azi.provider = provider
 
-	if err := azi.provider.Run(ctx); err != nil {
+	if err := azi.provider.Run(azi.refreshDelayInSecond, ctx); err != nil {
 		log.Error(err)
 		cancel()
 		return plugin.Error("azure_identity", err)
@@ -46,6 +47,8 @@ func setup(c *caddy.Controller) error {
 func parse(c *caddy.Controller) (AzureIdentity, error) {
 
 	azureIdentity := AzureIdentity{}
+	azureIdentity.local = false             // default value
+	azureIdentity.refreshDelayInSecond = 60 // default value
 
 	for c.Next() {
 		for c.NextBlock() {
@@ -55,6 +58,22 @@ func parse(c *caddy.Controller) (AzureIdentity, error) {
 					return azureIdentity, c.ArgErr()
 				}
 				azureIdentity.subscriptionId = c.Val()
+			case "local":
+				if c.NextArg() {
+					return azureIdentity, c.ArgErr()
+				}
+				azureIdentity.local = true
+			case "refresh":
+				if !c.NextArg() {
+					return azureIdentity, c.ArgErr()
+				}
+				delay, err := strconv.ParseInt(c.Val(), 10, 32)
+
+				if err != nil {
+					return azureIdentity, err
+				}
+
+				azureIdentity.refreshDelayInSecond = delay
 			case "tenant":
 				if !c.NextArg() {
 					return azureIdentity, c.ArgErr()

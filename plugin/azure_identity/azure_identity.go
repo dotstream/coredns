@@ -13,13 +13,15 @@ import (
 var log = clog.NewWithPlugin("azure_identity")
 
 type AzureIdentity struct {
-	resourceGroupName string
-	tenantId          string
-	subscriptionId    string
-	clientId          string
-	clientSecret      string
-	provider          *AzureProvider
-	Next              plugin.Handler
+	resourceGroupName    string
+	local                bool
+	refreshDelayInSecond int64
+	tenantId             string
+	subscriptionId       string
+	clientId             string
+	clientSecret         string
+	provider             *AzureProvider
+	Next                 plugin.Handler
 }
 
 func (az AzureIdentity) Name() string { return "azure_identity" }
@@ -47,7 +49,10 @@ func (az AzureIdentity) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *d
 	m.SetReply(r)
 	m.Authoritative = true
 	var result file.Result
+
+	az.provider.zMu.RLock()
 	m.Answer, m.Ns, m.Extra, result = mz.z.Lookup(ctx, state, qname)
+	az.provider.zMu.RUnlock()
 
 	if len(m.Answer) == 0 && result != file.NoData {
 		log.Warningf("No data found for qname %s.", qname)
