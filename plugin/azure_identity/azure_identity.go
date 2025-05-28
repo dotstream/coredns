@@ -35,7 +35,7 @@ func (az AzureIdentity) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *d
 	zone := plugin.Zones(az.provider.zoneNames).Matches(qname)
 
 	if zone == "" {
-		log.Infof("%s is not part of our current zone %s.", qname, zone)
+		log.Debugf("%s is not part of our current zone %s.", qname, zone)
 		return plugin.NextOrFailure(az.Name(), az.Next, ctx, w, r)
 	}
 
@@ -80,7 +80,7 @@ func (az AzureIdentity) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *d
 	}
 	answers = strings.TrimRight(answers, ",")
 
-	log.Infof("Request (%s) => result (%d) , answer(%s).", qname, result, answers)
+	log.Debugf("Request (%s) => result (%d) , answer(%s).", qname, result, answers)
 
 	w.WriteMsg(m)
 	return dns.RcodeSuccess, nil
