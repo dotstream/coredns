@@ -11,11 +11,11 @@ package dnsserver
 // care what plugin above them are doing.
 var Directives = []string{
 	"root",
+	"log",
 	"records_2",
 	"rewrite",
 	"azure_identity",
 	"forward",
-	"log",
 	"errors",
 	"metadata",
 	"geoip",

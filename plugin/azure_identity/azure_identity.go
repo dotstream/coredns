@@ -2,6 +2,7 @@ package azure_identity
 
 import (
 	"context"
+	"strings"
 
 	"github.com/coredns/coredns/plugin"
 	"github.com/coredns/coredns/plugin/file"
@@ -45,6 +46,8 @@ func (az AzureIdentity) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *d
 		return dns.RcodeServerFailure, nil
 	}
 
+	log.Infof("%s is requesting from our current zone %s.", qname, zone)
+
 	m := new(dns.Msg)
 	m.SetReply(r)
 	m.Authoritative = true
@@ -67,8 +70,17 @@ func (az AzureIdentity) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *d
 	case file.Delegation:
 		m.Authoritative = false
 	case file.ServerFailure:
+		log.Infof("Request (%s) => result (ServerFailure)", qname)
 		return dns.RcodeServerFailure, nil
 	}
+
+	answers := ""
+	for _, a := range m.Answer {
+		answers += a.String() + ","
+	}
+	answers = strings.TrimRight(answers, ",")
+
+	log.Infof("Request (%s) => result (%d) , answer(%s).", qname, result, answers)
 
 	w.WriteMsg(m)
 	return dns.RcodeSuccess, nil
