@@ -15,8 +15,9 @@ type Records struct {
 	origins []string // for easy matching, these strings are the index in the map m.
 	m       map[string][]dns.RR
 
-	Next plugin.Handler
-	Fall *fall.F
+	combine bool
+	Next    plugin.Handler
+	Fall    *fall.F
 }
 
 // ServeDNS implements the plugin.Handle interface.
@@ -62,8 +63,12 @@ func (re *Records) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Ms
 	}
 
 	if len(m.Answer) == 0 {
-		if soa != nil {
-			m.Ns = []dns.RR{soa}
+		if !re.combine {
+			if soa != nil {
+				m.Ns = []dns.RR{soa}
+			}
+		} else {
+			return plugin.NextOrFailure(re.Name(), re.Next, ctx, w, r)
 		}
 	}
 

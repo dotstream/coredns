@@ -32,6 +32,7 @@ func setup(c *caddy.Controller) error {
 
 func recordsParse(c *caddy.Controller) (*Records, error) {
 	re := New()
+	re.combine = false
 
 	i := 0
 	for c.Next() {
@@ -75,6 +76,9 @@ func recordsParse(c *caddy.Controller) (*Records, error) {
 				if len(c.RemainingArgs()) > 0 {
 					return nil, fmt.Errorf("parsing block failed: extra arguments after option %q", opt)
 				}
+				continue parseBlocks
+			} else if s == "combine" {
+				re.combine = true
 				continue parseBlocks
 			}
 			s += " " + strings.Join(c.RemainingArgs(), " ")
